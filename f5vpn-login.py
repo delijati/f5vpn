@@ -135,19 +135,6 @@ class Platform:
     def teardown_dns(self):
         pass
 
-class DummyPlatform:
-    def setup_route(self, ifname, gateway_ip, net, bits, action):
-        print "setup_route(ifname=%r, gateway_ip=%r, net=%r, bits=%r, action=%r" % (ifname, gateway_ip, net, bits, action)
-
-    def setup_host_route(self, ifname, gateway_ip, net, bits):
-        print "teardown_route(ifname=%r, gateway_ip=%r, net=%r, bits=%r" % (ifname, gateway_ip, net, bits)
-
-    def setup_dns(self, iface_name, service_id, dns_servers, dns_domains, revdns_domains, override_gateway):
-        print "setup_dns(iface_name=%r, service_id=%r, dns_servers=%r, dns_domains=%r, revdns_domains=%r, override_gateway=%r)" % (iface_name, service_id, dns_servers, dns_domains, revdns_domains, override_gateway)
-
-    def teardown_dns(self):
-        print "teardown_dns()"
-
 class DarwinPlatform(Platform):
     def __init__(self):
         if os.path.exists("/sbin/route"):
@@ -218,83 +205,6 @@ class DarwinPlatform(Platform):
 #+ revdns_domains
                 SystemConfiguration.SCDynamicStoreSetValue(sc, 'State:/Network/Service/%s/DNS' % service_id, d)
             as_root(setup_helper)
-
-class ManualFrobbingDNSMixin:
-    resolv_conf_timestamp = 0
-
-    def setup_dns(self, iface_name, service_id, dns_servers, dns_domains, revdns_domains, override_gateway):
-        if override_gateway:
-            old_resolv_conf = []
-        else:
-            old_resolv_conf = open("/etc/resolv.conf").readlines()
-
-        other_lines = []
-        search = ''
-        nses = []
-        for line in old_resolv_conf:
-            line = line.rstrip('\n')
-            if line.startswith('search ') or line.startswith('domain '):
-                # domain entry is simply an alternative spelling for search
-                search = line.split(' ', 1)[1]
-            elif line.startswith('nameserver '):
-                nses.append(line.split(' ', 1)[1])
-            else:
-                other_lines.append(line)
-
-        new_resolv_conf = []
-        new_resolv_conf.append("search %s %s" % (' '.join(dns_domains), search))
-        for ns in dns_servers + nses:
-            new_resolv_conf.append("nameserver %s" % ns)
-        new_resolv_conf.extend(other_lines)
-        new_resolv_conf.append('')
-
-        def _create_file():
-            os.rename('/etc/resolv.conf', '/etc/resolv.conf.f5_bak')
-            open('/etc/resolv.conf', 'w').write('\n'.join(new_resolv_conf))
-        as_root(_create_file)
-
-        self.resolv_conf_timestamp = os.stat('/etc/resolv.conf').st_mtime
-
-    def teardown_dns(self):
-        as_root(self._teardown_dns)
-
-    def _teardown_dns(self):
-        try:
-            if self.resolv_conf_timestamp == 0:
-                pass
-            elif os.stat('/etc/resolv.conf').st_mtime == self.resolv_conf_timestamp:
-                os.rename('/etc/resolv.conf.f5_bak', '/etc/resolv.conf')
-            else:
-                sys.stderr.write("Not restoring resolv.conf: modified by another process.\n")
-                os.unlink('/etc/resolv.conf.f5_bak')
-        except:
-            pass
-
-class ResolvConfHelperDNSMixin:
-    def setup_dns(self, iface_name, service_id, dns_servers, dns_domains, revdns_domains, override_gateway):
-        # FIXME: should I be doing something different here based on override_gateway?
-
-        # ResolvConf is a system for managing your resolv.conf file in a
-        # structured way on unix systems. When it is installed, go through it,
-        # rather than munging the file manually (and thus causing potential
-        # conflicts)
-
-        # We append tun- to the interface so the proper record order is
-        # established with the resolvconf distribution.  Since we're essentially
-        # using ppp for the same reason as most people would use tun, this
-        # should be okay
-        self.iface_name = iface_name
-        cmd = "nameserver %s\nsearch %s\n" % (' '.join(dns_servers), ' '.join(dns_domains))
-        run_as_root(['/sbin/resolvconf', '-a', 'tun-%s' % iface_name], stdin=cmd)
-
-    def teardown_dns(self):
-        as_root(self._teardown_dns)
-
-    def _teardown_dns(self):
-        try:
-            run_as_root(["/sbin/resolvconf", '-d', 'tun-%s' % self.iface_name])
-        except:
-            pass
 
 
 platform = DarwinPlatform()
